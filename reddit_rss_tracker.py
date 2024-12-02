@@ -85,10 +85,20 @@ def fetch_posts():
 
 def fetch_post_content(link):
     try:
-        response = requests.get(f"{link}.json")
+        # Modify the link to ensure it's a proper Reddit JSON endpoint
+        json_link = link.rstrip('/') + '/.json'
+        response = requests.get(json_link)
         if response.status_code == 200:
             data = response.json()
-            post_data = data[0]['data']['children'][0]['data']
+            
+            # Check if data is a list and has the expected structure
+            if isinstance(data, list) and len(data) > 0:
+                post_data = data[0]['data']['children'][0]['data']
+            elif isinstance(data, dict) and 'data' in data:
+                post_data = data['data']['children'][0]['data']
+            else:
+                log_debug(f"Unexpected JSON structure for link: {link}")
+                return "No content available"
             
             # Extract selftext_html for text-based posts
             content_html = post_data.get('selftext_html')
@@ -103,7 +113,7 @@ def fetch_post_content(link):
             
             return content_html
     except Exception as e:
-        log_debug(f"Error fetching post content: {e}")
+        log_debug(f"Error fetching post content for {link}: {e}")
     return "No content available"
 
 def update_database(posts):
