@@ -88,7 +88,15 @@ def fetch_post_content(link):
         response = requests.get(f"{link}.json")
         if response.status_code == 200:
             data = response.json()
-            content_html = data[0]['data']['children'][0]['data'].get('selftext_html', None)
+            post_data = data[0]['data']['children'][0]['data']
+            
+            # Check for selftext_html for text-based posts
+            content_html = post_data.get('selftext_html', None)
+            
+            # If selftext_html is not available, fallback to the URL or other content
+            if not content_html:
+                content_html = f"<a href='{post_data['url']}'>{post_data['url']}</a>"
+            
             return content_html
     except Exception as e:
         log_debug(f"Error fetching post content: {e}")
