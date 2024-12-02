@@ -90,17 +90,21 @@ def fetch_post_content(link):
             data = response.json()
             post_data = data[0]['data']['children'][0]['data']
             
-            # Check for selftext_html for text-based posts
-            content_html = post_data.get('selftext_html', None)
+            # Extract selftext_html for text-based posts
+            content_html = post_data.get('selftext_html')
             
-            # If selftext_html is not available, fallback to the URL or other content
+            # Fallback to selftext if HTML is unavailable
+            if not content_html:
+                content_html = post_data.get('selftext', "No content available")
+            
+            # Optionally, add a fallback for non-self posts
             if not content_html:
                 content_html = f"<a href='{post_data['url']}'>{post_data['url']}</a>"
             
             return content_html
     except Exception as e:
         log_debug(f"Error fetching post content: {e}")
-    return None
+    return "No content available"
 
 def update_database(posts):
     conn = sqlite3.connect(DB_NAME)
