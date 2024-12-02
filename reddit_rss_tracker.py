@@ -64,14 +64,16 @@ def fetch_posts():
         log_debug(f"XML parsing error: {e}")
         return []
 
+    namespaces = {"atom": "http://www.w3.org/2005/Atom", "media": "http://search.yahoo.com/mrss/"}
+
     posts = []
-    for entry in root.findall('entry'):
+    for entry in root.findall("atom:entry", namespaces):
         post = {
-            'id': entry.find('id').text,
-            'title': entry.find('title').text,
-            'link': entry.find('link').attrib['href'],
-            'published': entry.find('updated').text,
-            'author': entry.find('author/name').text,
+            'id': entry.find("atom:id", namespaces).text,
+            'title': entry.find("atom:title", namespaces).text,
+            'link': entry.find("atom:link", namespaces).attrib['href'],
+            'published': entry.find("atom:updated", namespaces).text,
+            'author': entry.find("atom:author/atom:name", namespaces).text,
             'thumbnail': None
         }
         posts.append(post)
