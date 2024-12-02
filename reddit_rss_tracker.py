@@ -1,6 +1,5 @@
 import requests
 import sqlite3
-import json
 from datetime import datetime
 import xml.etree.ElementTree as ET
 
@@ -35,6 +34,7 @@ def init_db():
         published TEXT,
         author TEXT,
         thumbnail TEXT,
+        content TEXT,
         first_seen TEXT,
         last_seen TEXT
     )
@@ -68,17 +68,31 @@ def fetch_posts():
 
     posts = []
     for entry in root.findall("atom:entry", namespaces):
+        post_link = entry.find("atom:link", namespaces).attrib['href']
+        post_content = fetch_post_content(post_link)
         post = {
             'id': entry.find("atom:id", namespaces).text,
             'title': entry.find("atom:title", namespaces).text,
-            'link': entry.find("atom:link", namespaces).attrib['href'],
+            'link': post_link,
             'published': entry.find("atom:updated", namespaces).text,
             'author': entry.find("atom:author/atom:name", namespaces).text,
-            'thumbnail': None
+            'thumbnail': None,
+            'content': post_content
         }
         posts.append(post)
 
     return posts
+
+def fetch_post_content(link):
+    try:
+        response = requests.get(f"{link}.json")
+        if response.status_code == 200:
+            data = response.json()
+            content_html = data[0]['data']['children'][0]['data'].get('selftext_html', None)
+            return content_html
+    except Exception as e:
+        log_debug(f"Error fetching post content: {e}")
+    return None
 
 def update_database(posts):
     conn = sqlite3.connect(DB_NAME)
@@ -95,12 +109,12 @@ def update_database(posts):
 
         if result is None:
             cursor.execute('''
-            INSERT INTO posts (id, title, link, published, author, thumbnail, first_seen, last_seen)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (post['id'], post['title'], post['link'], post['published'], post['author'], post['thumbnail'], current_time, current_time))
+            INSERT INTO posts (id, title, link, published, author, thumbnail, content, first_seen, last_seen)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (post['id'], post['title'], post['link'], post['published'], post['author'], post['thumbnail'], post['content'], current_time, current_time))
             new_posts.append(post)
         else:
-            cursor.execute('UPDATE posts SET last_seen = ? WHERE id = ?', (current_time, post['id']))
+            cursor.execute('UPDATE posts SET last_seen = ?, content = ? WHERE id = ?', (current_time, post['content'], post['id']))
             updated_posts.append(post)
 
     cursor.execute('INSERT INTO runs (run_time) VALUES (?)', (current_time,))
@@ -109,29 +123,6 @@ def update_database(posts):
     conn.close()
 
     return new_posts, updated_posts
-
-def get_removed_posts():
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-
-    cursor.execute('SELECT run_time FROM runs ORDER BY id DESC LIMIT 1 OFFSET 1')
-    result = cursor.fetchone()
-    if result is None:
-        return []
-
-    previous_run_time = result[0]
-
-    cursor.execute('''
-    SELECT id, title, link, published, author, thumbnail
-    FROM posts
-    WHERE last_seen = ? AND last_seen < (SELECT MAX(run_time) FROM runs)
-    ''', (previous_run_time,))
-
-    removed_posts = [dict(zip(['id', 'title', 'link', 'published', 'author', 'thumbnail'], row)) for row in cursor.fetchall()]
-
-    conn.close()
-
-    return removed_posts
 
 def send_email(new_posts):
     headers = {
@@ -148,6 +139,7 @@ def send_email(new_posts):
                     <li><strong>Title:</strong> <a href='{post['link']}'>{post['title']}</a></li>
                     <li><strong>Author:</strong> {post['author']}</li>
                     <li><strong>Published:</strong> {post['published']}</li>
+                    <li><strong>Content:</strong> {post['content'] if post['content'] else 'No content available'}</li>
                 </ul>
                 <p>Click the title to view the full post.</p>
             </body>
@@ -179,20 +171,9 @@ def main():
 
     current_posts = fetch_posts()
     new_posts, updated_posts = update_database(current_posts)
-    removed_posts = get_removed_posts()
-
-    comparison_results = {
-        'new_posts': new_posts,
-        'updated_posts': updated_posts,
-        'removed_posts': removed_posts
-    }
-
-    with open('comparison_result.json', 'w') as f:
-        json.dump(comparison_results, f, indent=2)
 
     log_debug(f"Found {len(new_posts)} new posts")
     log_debug(f"Updated {len(updated_posts)} existing posts")
-    log_debug(f"Removed {len(removed_posts)} posts")
 
     if new_posts:
         send_email(new_posts)
