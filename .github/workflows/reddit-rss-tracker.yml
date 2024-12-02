@@ -31,7 +31,12 @@ jobs:
         run: python reddit_rss_tracker.py
 
       - name: Display debug log
-        run: cat debug.log
+        run: |
+          if [ -f debug.log ]; then
+            cat debug.log
+          else
+            echo "No debug.log file found."
+          fi
         if: always()
 
       - name: Upload debug log
@@ -41,17 +46,18 @@ jobs:
           name: debug-log
           path: debug.log
 
-      - name: Upload comparison result
+      - name: Upload database
         uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: comparison-result
-          path: comparison_result.json
+          name: database
+          path: reddit_posts.db
 
       - name: Commit and push if there are changes
         run: |
-          git config user.name github-actions
-          git config user.email github-actions@github.com
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
           git add reddit_posts.db
-          git commit -m "Update RSS feed data" || echo "No changes to commit"
+          git diff-index --quiet HEAD || git commit -m "Update RSS feed data"
           git push
+        if: success()
