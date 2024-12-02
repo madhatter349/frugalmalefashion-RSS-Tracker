@@ -4,7 +4,7 @@ on:
   push:
   workflow_dispatch:
   schedule:
-    - cron: '14,27,43,56 * * * *'
+    - cron: '*/5 * * * *'
 
 jobs:
   track-rss:
