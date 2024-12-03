@@ -85,19 +85,15 @@ def fetch_posts():
 
 def fetch_post_content(link):
     try:
-        # Append `.json` to the Reddit post URL
-        json_link = link + '.json'
-        response = requests.get(json_link)
+        # Append `/.rss` to the Reddit post URL
+        rss_link = link + '/.rss'
+        response = requests.get(rss_link)
 
         if response.status_code == 200:
-            data = response.json()
+            data = response.text  # RSS feed is usually XML, so fetch as text
 
-            # Extract content from the JSON response
-            if isinstance(data, list) and len(data) > 0:
-                post_data = data[0]['data']['children'][0]['data']
-                # Get the formatted HTML content or plain text as a fallback
-                content_html = post_data.get('selftext_html') or post_data.get('selftext', "No content available")
-                return content_html
+            # Process the RSS feed content (e.g., using an XML parser if needed)
+            return data
 
         log_debug(f"Failed to fetch content for {link}: Status Code {response.status_code}")
     except Exception as e:
