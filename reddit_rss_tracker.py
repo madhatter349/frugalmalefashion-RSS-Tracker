@@ -82,8 +82,11 @@ def fetch_posts():
         return []
 
     try:
+        # Fix XML namespace handling
         root = ET.fromstring(response.content)
-        namespace = {'atom': 'http://www.w3.org/2005/Atom'}
+        namespace = {'atom': 'http://www.w3.org/2005/Atom', 
+                     'media': 'http://search.yahoo.com/mrss/'}
+        
         posts = []
 
         for entry in root.findall('atom:entry', namespace):
@@ -91,7 +94,7 @@ def fetch_posts():
             title = entry.find('atom:title', namespace).text
             link = entry.find("atom:link[@rel='alternate']", namespace).attrib['href']
             author = entry.find('atom:author/atom:name', namespace).text
-            thumbnail_elem = entry.find('atom:media:thumbnail', namespace)
+            thumbnail_elem = entry.find('media:thumbnail', namespace)
             thumbnail = thumbnail_elem.attrib['url'] if thumbnail_elem is not None else None
 
             # Fetch detailed content for the post
@@ -111,7 +114,7 @@ def fetch_posts():
     except Exception as e:
         log_debug(f"RSS parsing error: {e}")
         return []
-
+        
 # Update database with fetched posts
 def update_database(posts):
     conn = sqlite3.connect(DB_NAME)
