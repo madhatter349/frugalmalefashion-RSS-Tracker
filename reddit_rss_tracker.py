@@ -1,9 +1,7 @@
 import requests
 import sqlite3
 from datetime import datetime
-import time
-import feedparser
-from bs4 import BeautifulSoup
+import xml.etree.ElementTree as ET
 
 # RSS feed URL
 RSS_URL = "https://old.reddit.com/r/frugalmalefashion/new/.rss"
@@ -35,7 +33,8 @@ def init_db():
         link TEXT,
         published TEXT,
         author TEXT,
-        description TEXT,
+        thumbnail TEXT,
+        content TEXT,
         first_seen TEXT,
         last_seen TEXT
     )
@@ -53,77 +52,144 @@ def fetch_posts():
     user_agent = get_user_agent()
     headers = {"user-agent": user_agent}
     log_debug(f"Fetching RSS feed from {RSS_URL}")
-    try:
-        response = requests.get(RSS_URL, headers=headers)
-        if response.status_code != 200:
-            log_debug(f"Error: Received status code {response.status_code}")
-            return []
+    response = requests.get(RSS_URL, headers=headers)
 
-        feed = feedparser.parse(response.content)
-        if feed.bozo:  # Indicates an error while parsing
-            log_debug(f"Error parsing RSS feed: {feed.bozo_exception}")
-            return []
-
-        return feed.entries
-    except Exception as e:
-        log_debug(f"Error fetching posts: {e}")
+    if response.status_code != 200:
+        log_debug(f"Error: Received status code {response.status_code}")
         return []
 
-def clean_description(raw_html):
     try:
-        soup = BeautifulSoup(raw_html, 'html.parser')
-        # Extract and clean the text content
-        return soup.get_text(separator=" ", strip=True)
+        root = ET.fromstring(response.content)
+    except ET.ParseError as e:
+        log_debug(f"XML parsing error: {e}")
+        return []
+
+    namespaces = {"atom": "http://www.w3.org/2005/Atom", "media": "http://search.yahoo.com/mrss/"}
+
+    posts = []
+    for entry in root.findall("atom:entry", namespaces):
+        post_link = entry.find("atom:link", namespaces).attrib['href']
+        post_content = fetch_post_content(post_link)
+        post = {
+            'id': entry.find("atom:id", namespaces).text,
+            'title': entry.find("atom:title", namespaces).text,
+            'link': post_link,
+            'published': entry.find("atom:updated", namespaces).text,
+            'author': entry.find("atom:author/atom:name", namespaces).text,
+            'thumbnail': None,
+            'content': post_content
+        }
+        posts.append(post)
+
+    return posts
+
+def fetch_post_content(link):
+    try:
+        rss_link = "/".join(link.split("/")[:6]) + "/.rss"
+        response = requests.get(rss_link)
+
+        if response.status_code == 200:
+            root = ET.fromstring(response.content)
+            namespaces = {"atom": "http://www.w3.org/2005/Atom"}
+            
+            # Find the first entry's content (assuming 1 entry per post)
+            content = root.find("atom:entry/atom:content", namespaces)
+            if content is not None:
+                return content.text
+            
+        log_debug(f"Failed to fetch content for {link}: Status Code {response.status_code}")
     except Exception as e:
-        log_debug(f"Error cleaning description: {e}")
-        return raw_html
+        log_debug(f"Error fetching post content for {link}: {e}")
+
+    return "No content available"
 
 def update_database(posts):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
 
     current_time = datetime.now().isoformat()
+
     new_posts = []
+    updated_posts = []
 
     for post in posts:
-        post_id = post.get("id", post.get("link"))
-        cursor.execute('SELECT id FROM posts WHERE id = ?', (post_id,))
+        cursor.execute('SELECT id, last_seen FROM posts WHERE id = ?', (post['id'],))
         result = cursor.fetchone()
-
-        cleaned_description = clean_description(post.get("summary", ""))
 
         if result is None:
             cursor.execute('''
-            INSERT INTO posts (id, title, link, published, author, description, first_seen, last_seen)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                post_id,
-                post.get("title"),
-                post.get("link"),
-                post.get("published", ""),
-                post.get("author", ""),
-                cleaned_description,
-                current_time,
-                current_time
-            ))
+            INSERT INTO posts (id, title, link, published, author, thumbnail, content, first_seen, last_seen)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (post['id'], post['title'], post['link'], post['published'], post['author'], post['thumbnail'], post['content'], current_time, current_time))
             new_posts.append(post)
         else:
-            cursor.execute('UPDATE posts SET last_seen = ? WHERE id = ?', (current_time, post_id))
+            cursor.execute('UPDATE posts SET last_seen = ?, content = ? WHERE id = ?', (current_time, post['content'], post['id']))
+            updated_posts.append(post)
 
     cursor.execute('INSERT INTO runs (run_time) VALUES (?)', (current_time,))
+
     conn.commit()
     conn.close()
 
-    return new_posts
+    return new_posts, updated_posts
+
+def send_email(new_posts):
+    headers = {
+        'Content-Type': 'application/x-www-form-urlencoded',
+    }
+
+    for post in new_posts:
+        body_content = f"""
+        <html>
+            <body>
+                <h2>New Post from Reddit Tracker</h2>
+                <p>A new post has been found on <strong>Frugal Male Fashion</strong>:</p>
+                <ul>
+                    <li><strong>Title:</strong> <a href='{post['link']}'>{post['title']}</a></li>
+                    <li><strong>Author:</strong> {post['author']}</li>
+                    <li><strong>Published:</strong> {post['published']}</li>
+                    <li><strong>Content:</strong> {post['content'] if post['content'] else 'No content available'}</li>
+                </ul>
+                <p>Click the title to view the full post.</p>
+            </body>
+        </html>
+        """
+
+        subject_title = post['title'] if len(post['title']) <= 100 else post['title'][:97] + '...'
+
+        data = {
+            'to': 'madhatter349@gmail.com',
+            'subject': f"New Post: {subject_title}",
+            'body': body_content,
+            'type': 'text/html'
+        }
+
+        response = requests.post('https://www.cinotify.cc/api/notify', headers=headers, data=data)
+
+        log_debug(f"Email sending status code: {response.status_code}")
+        log_debug(f"Email sending response: {response.text}")
+
+        if response.status_code != 200:
+            log_debug(f"Failed to send email for post: {post['title']}. Status code: {response.status_code}")
+        else:
+            log_debug(f"Email sent successfully for post: {post['title']}")
 
 def main():
     log_debug("Script started")
     init_db()
 
     current_posts = fetch_posts()
-    new_posts = update_database(current_posts)
+    new_posts, updated_posts = update_database(current_posts)
 
     log_debug(f"Found {len(new_posts)} new posts")
+    log_debug(f"Updated {len(updated_posts)} existing posts")
+
+    if new_posts:
+        send_email(new_posts)
+        log_debug(f"Attempted to send {len(new_posts)} email(s) for new posts")
+    else:
+        log_debug("No new posts found. No emails sent.")
+
     log_debug("Script finished")
 
 if __name__ == "__main__":
