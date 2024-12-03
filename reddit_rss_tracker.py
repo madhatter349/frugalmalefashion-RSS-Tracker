@@ -87,7 +87,14 @@ def fetch_post_content(link):
     try:
         # Append `.json` to the Reddit post URL
         json_link = link + '.json'
-        response = requests.get(json_link)
+        
+        # Use the same user agent method as in get_user_agent()
+        headers = {
+            "User-Agent": get_user_agent(),
+            "Accept": "application/json"
+        }
+        
+        response = requests.get(json_link, headers=headers)
 
         if response.status_code == 200:
             data = response.json()
@@ -98,8 +105,12 @@ def fetch_post_content(link):
                 # Get the formatted HTML content or plain text as a fallback
                 content_html = post_data.get('selftext_html') or post_data.get('selftext', "No content available")
                 return content_html
-
+        
+        # Log more detailed error information
         log_debug(f"Failed to fetch content for {link}: Status Code {response.status_code}")
+        log_debug(f"Response headers: {response.headers}")
+        log_debug(f"Response content: {response.text}")
+
     except Exception as e:
         log_debug(f"Error fetching post content for {link}: {e}")
 
