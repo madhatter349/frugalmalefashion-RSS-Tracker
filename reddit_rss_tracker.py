@@ -13,6 +13,17 @@ def log_debug(message):
     with open('debug.log', 'a') as f:
         f.write(f"{datetime.now()}: {message}\n")
 
+# Get user-agent
+def get_user_agent():
+    try:
+        user_agents = requests.get(
+            "https://techfanetechnologies.github.io/latest-user-agent/user_agents.json"
+        ).json()
+        return user_agents[-2]
+    except Exception as e:
+        log_debug(f"Error fetching user agent: {e}")
+        return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+
 # Initialize database
 def init_db():
     conn = sqlite3.connect(DB_NAME)
@@ -42,7 +53,8 @@ def init_db():
 def fetch_post_details(post_id):
     detailed_url = f"https://old.reddit.com/r/{SUBREDDIT}/comments/{post_id}/.rss"
     log_debug(f"Fetching detailed RSS feed from {detailed_url}")
-    response = requests.get(detailed_url)
+    headers = {"User-Agent": get_user_agent()}
+    response = requests.get(detailed_url, headers=headers)
 
     if response.status_code != 200:
         log_debug(f"Error fetching detailed RSS: {response.status_code}")
@@ -62,7 +74,8 @@ def fetch_post_details(post_id):
 # Fetch posts from RSS feed
 def fetch_posts():
     log_debug(f"Fetching RSS feed from {RSS_URL}")
-    response = requests.get(RSS_URL)
+    headers = {"User-Agent": get_user_agent()}
+    response = requests.get(RSS_URL, headers=headers)
 
     if response.status_code != 200:
         log_debug(f"Error: Received status code {response.status_code}")
