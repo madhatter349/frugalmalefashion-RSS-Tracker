@@ -1,13 +1,11 @@
 import requests
 import sqlite3
 from datetime import datetime
-import xml.etree.ElementTree as ET
-
-# RSS feed URL
-RSS_URL = "https://www.reddit.com/r/frugalmalefashion/.rss"
 
 # Database setup
 DB_NAME = 'reddit_posts.db'
+SUBREDDIT = "frugalmalefashion"
+JSON_URL = f"https://www.reddit.com/r/{SUBREDDIT}/new.json"
 
 def log_debug(message):
     with open('debug.log', 'a') as f:
@@ -51,70 +49,35 @@ def init_db():
 def fetch_posts():
     user_agent = get_user_agent()
     headers = {"user-agent": user_agent}
-    log_debug(f"Fetching RSS feed from {RSS_URL}")
-    response = requests.get(RSS_URL, headers=headers)
+    log_debug(f"Fetching JSON feed from {JSON_URL}")
+    response = requests.get(JSON_URL, headers=headers)
 
     if response.status_code != 200:
         log_debug(f"Error: Received status code {response.status_code}")
         return []
 
     try:
-        root = ET.fromstring(response.content)
-    except ET.ParseError as e:
-        log_debug(f"XML parsing error: {e}")
-        return []
+        data = response.json()
+        posts = []
 
-    namespaces = {"atom": "http://www.w3.org/2005/Atom", "media": "http://search.yahoo.com/mrss/"}
+        for child in data.get("data", {}).get("children", []):
+            post_data = child.get("data", {})
+            post = {
+                'id': post_data.get("id"),
+                'title': post_data.get("title"),
+                'link': f"https://www.reddit.com{post_data.get('permalink')}",
+                'published': datetime.utcfromtimestamp(post_data.get("created_utc")).isoformat(),
+                'author': post_data.get("author"),
+                'thumbnail': post_data.get("thumbnail"),
+                'content': post_data.get("selftext_html") or post_data.get("selftext", "No content available")
+            }
+            posts.append(post)
 
-    posts = []
-    for entry in root.findall("atom:entry", namespaces):
-        post_link = entry.find("atom:link", namespaces).attrib['href']
-        post_content = fetch_post_content(post_link)
-        post = {
-            'id': entry.find("atom:id", namespaces).text,
-            'title': entry.find("atom:title", namespaces).text,
-            'link': post_link,
-            'published': entry.find("atom:updated", namespaces).text,
-            'author': entry.find("atom:author/atom:name", namespaces).text,
-            'thumbnail': None,
-            'content': post_content
-        }
-        posts.append(post)
-
-    return posts
-
-def fetch_post_content(link):
-    try:
-        # Append `.json` to the Reddit post URL
-        json_link = link + '.json'
-        
-        # Use the same user agent method as in get_user_agent()
-        headers = {
-            "User-Agent": get_user_agent(),
-            "Accept": "application/json"
-        }
-        
-        response = requests.get(json_link, headers=headers)
-
-        if response.status_code == 200:
-            data = response.json()
-
-            # Extract content from the JSON response
-            if isinstance(data, list) and len(data) > 0:
-                post_data = data[0]['data']['children'][0]['data']
-                # Get the formatted HTML content or plain text as a fallback
-                content_html = post_data.get('selftext_html') or post_data.get('selftext', "No content available")
-                return content_html
-        
-        # Log more detailed error information
-        log_debug(f"Failed to fetch content for {link}: Status Code {response.status_code}")
-        log_debug(f"Response headers: {response.headers}")
-        log_debug(f"Response content: {response.text}")
+        return posts
 
     except Exception as e:
-        log_debug(f"Error fetching post content for {link}: {e}")
-
-    return "No content available"
+        log_debug(f"JSON parsing error: {e}")
+        return []
 
 def update_database(posts):
     conn = sqlite3.connect(DB_NAME)
@@ -156,7 +119,7 @@ def send_email(new_posts):
         <html>
             <body>
                 <h2>New Post from Reddit Tracker</h2>
-                <p>A new post has been found on <strong>Frugal Male Fashion</strong>:</p>
+                <p>A new post has been found on <strong>{SUBREDDIT}</strong>:</p>
                 <ul>
                     <li><strong>Title:</strong> <a href='{post['link']}'>{post['title']}</a></li>
                     <li><strong>Author:</strong> {post['author']}</li>
