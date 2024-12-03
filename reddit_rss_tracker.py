@@ -6,7 +6,7 @@ import xml.etree.ElementTree as ET
 # Database setup
 DB_NAME = 'reddit_posts.db'
 SUBREDDIT = "frugalmalefashion"
-RSS_URL = f"https://rss.reddit.com/r/{SUBREDDIT}/new"
+RSS_URL = f"https://old.reddit.com/r/{SUBREDDIT}/new/.rss"
 
 # Debug logging
 def log_debug(message):
@@ -38,6 +38,27 @@ def init_db():
     conn.commit()
     conn.close()
 
+# Fetch detailed content for a post
+def fetch_post_details(post_id):
+    detailed_url = f"https://old.reddit.com/r/{SUBREDDIT}/comments/{post_id}/.rss"
+    log_debug(f"Fetching detailed RSS feed from {detailed_url}")
+    response = requests.get(detailed_url)
+
+    if response.status_code != 200:
+        log_debug(f"Error fetching detailed RSS: {response.status_code}")
+        return ""
+
+    try:
+        root = ET.fromstring(response.content)
+        namespace = {'atom': 'http://www.w3.org/2005/Atom'}
+        entry = root.find('atom:entry', namespace)
+        if entry is not None:
+            content = entry.find('atom:content', namespace).text
+            return content
+    except Exception as e:
+        log_debug(f"Error parsing detailed RSS: {e}")
+    return ""
+
 # Fetch posts from RSS feed
 def fetch_posts():
     log_debug(f"Fetching RSS feed from {RSS_URL}")
@@ -57,11 +78,12 @@ def fetch_posts():
             title = entry.find('atom:title', namespace).text
             link = entry.find("atom:link[@rel='alternate']", namespace).attrib['href']
             author = entry.find('atom:author/atom:name', namespace).text
-            content = entry.find('atom:content', namespace).text
             thumbnail_elem = entry.find('atom:media:thumbnail', namespace)
             thumbnail = thumbnail_elem.attrib['url'] if thumbnail_elem is not None else None
 
-            # Keep content in HTML format for emails
+            # Fetch detailed content for the post
+            content = fetch_post_details(post_id)
+
             posts.append({
                 'id': post_id,
                 'title': title,
