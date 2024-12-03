@@ -86,12 +86,11 @@ def fetch_posts():
 def fetch_post_content(link):
     try:
         # Adjust the link format for the RSS feed
-        rss_link = link.replace("/comments/", "/") + "/.rss"
+        rss_link = "/".join(link.split("/")[:6]) + "/.rss"
         response = requests.get(rss_link)
 
         if response.status_code == 200:
-            data = response.text  # RSS feed is usually XML, so fetch as text
-            return data
+            return response.text
 
         log_debug(f"Failed to fetch content for {link}: Status Code {response.status_code}")
     except Exception as e:
