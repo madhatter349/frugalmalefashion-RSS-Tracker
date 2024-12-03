@@ -6,22 +6,14 @@ import xml.etree.ElementTree as ET
 # Database setup
 DB_NAME = 'reddit_posts.db'
 SUBREDDIT = "frugalmalefashion"
-JSON_URL = f"https://www.reddit.com/r/{SUBREDDIT}/new.json"
+RSS_URL = f"https://rss.reddit.com/r/{SUBREDDIT}/new"
 
+# Debug logging
 def log_debug(message):
     with open('debug.log', 'a') as f:
         f.write(f"{datetime.now()}: {message}\n")
 
-def get_user_agent():
-    try:
-        user_agents = requests.get(
-            "https://techfanetechnologies.github.io/latest-user-agent/user_agents.json"
-        ).json()
-        return user_agents[-2]
-    except Exception as e:
-        log_debug(f"Error fetching user agent: {e}")
-        return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-
+# Initialize database
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
@@ -30,7 +22,6 @@ def init_db():
         id TEXT PRIMARY KEY,
         title TEXT,
         link TEXT,
-        published TEXT,
         author TEXT,
         thumbnail TEXT,
         content TEXT,
@@ -47,69 +38,46 @@ def init_db():
     conn.commit()
     conn.close()
 
+# Fetch posts from RSS feed
 def fetch_posts():
-    user_agent = get_user_agent()
-    headers = {"user-agent": user_agent}
-    log_debug(f"Fetching JSON feed from {JSON_URL}")
-    response = requests.get(JSON_URL, headers=headers)
+    log_debug(f"Fetching RSS feed from {RSS_URL}")
+    response = requests.get(RSS_URL)
 
     if response.status_code != 200:
         log_debug(f"Error: Received status code {response.status_code}")
         return []
 
     try:
-        data = response.json()
+        root = ET.fromstring(response.content)
+        namespace = {'atom': 'http://www.w3.org/2005/Atom'}
         posts = []
 
-        for child in data.get("data", {}).get("children", []):
-            post_data = child.get("data", {})
-            post = {
-                'id': post_data.get("id"),
-                'title': post_data.get("title"),
-                'link': f"https://www.reddit.com{post_data.get('permalink')}",
-                'published': datetime.utcfromtimestamp(post_data.get("created_utc")).isoformat(),
-                'author': post_data.get("author"),
-                'thumbnail': post_data.get("thumbnail"),
-                'content': fetch_post_content(post_data.get("permalink"))
-            }
-            posts.append(post)
+        for entry in root.findall('atom:entry', namespace):
+            post_id = entry.find('atom:id', namespace).text.split('/')[-2]
+            title = entry.find('atom:title', namespace).text
+            link = entry.find("atom:link[@rel='alternate']", namespace).attrib['href']
+            author = entry.find('atom:author/atom:name', namespace).text
+            content = entry.find('atom:content', namespace).text
+            thumbnail_elem = entry.find('atom:media:thumbnail', namespace)
+            thumbnail = thumbnail_elem.attrib['url'] if thumbnail_elem is not None else None
+
+            # Keep content in HTML format for emails
+            posts.append({
+                'id': post_id,
+                'title': title,
+                'link': link,
+                'author': author,
+                'thumbnail': thumbnail,
+                'content': content
+            })
 
         return posts
 
     except Exception as e:
-        log_debug(f"JSON parsing error: {e}")
+        log_debug(f"RSS parsing error: {e}")
         return []
 
-def fetch_post_content(permalink):
-    try:
-        rss_url = f"https://rss.reddit.com{permalink}comments/"
-        user_agent = get_user_agent()
-        headers = {"user-agent": user_agent}
-        response = requests.get(rss_url, headers=headers)
-
-        if response.status_code != 200:
-            log_debug(f"Error fetching RSS for comments: {response.status_code}")
-            return "No comments available"
-
-        try:
-            root = ET.fromstring(response.content)
-            comments = []
-
-            for entry in root.findall("entry"):
-                comment_author = entry.find("author/name").text if entry.find("author/name") is not None else "Unknown"
-                comment_content = entry.find("content").text if entry.find("content") is not None else "No content"
-                comments.append(f"{comment_author}: {comment_content}")
-
-            return "\n".join(comments)
-
-        except ET.ParseError as e:
-            log_debug(f"Error parsing RSS for comments: {e}")
-            return "No comments available"
-
-    except Exception as e:
-        log_debug(f"Error fetching post content for {permalink}: {e}")
-        return "No comments available"
-
+# Update database with fetched posts
 def update_database(posts):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
@@ -125,9 +93,9 @@ def update_database(posts):
 
         if result is None:
             cursor.execute('''
-            INSERT INTO posts (id, title, link, published, author, thumbnail, content, first_seen, last_seen)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (post['id'], post['title'], post['link'], post['published'], post['author'], post['thumbnail'], post['content'], current_time, current_time))
+            INSERT INTO posts (id, title, link, author, thumbnail, content, first_seen, last_seen)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (post['id'], post['title'], post['link'], post['author'], post['thumbnail'], post['content'], current_time, current_time))
             new_posts.append(post)
         else:
             cursor.execute('UPDATE posts SET last_seen = ?, content = ? WHERE id = ?', (current_time, post['content'], post['id']))
@@ -140,6 +108,48 @@ def update_database(posts):
 
     return new_posts, updated_posts
 
+# Notify via email (optional functionality remains the same)
+def send_email(new_posts):
+    headers = {
+        'Content-Type': 'application/x-www-form-urlencoded',
+    }
+
+    for post in new_posts:
+        body_content = f"""
+        <html>
+            <body>
+                <h2>New Post from Reddit Tracker</h2>
+                <p>A new post has been found on <strong>{SUBREDDIT}</strong>:</p>
+                <ul>
+                    <li><strong>Title:</strong> <a href='{post['link']}'>{post['title']}</a></li>
+                    <li><strong>Author:</strong> {post['author']}</li>
+                    <li><strong>Content:</strong> {post['content']}</li>
+                </ul>
+                <p>Click the title to view the full post.</p>
+            </body>
+        </html>
+        """
+
+        subject_title = post['title'] if len(post['title']) <= 100 else post['title'][:97] + '...'
+
+        data = {
+            'to': 'madhatter349@gmail.com',
+            'subject': f"New Post: {subject_title}",
+            'body': body_content,
+            'type': 'text/html'
+        }
+
+        response = requests.post('https://www.cinotify.cc/api/notify', headers=headers, data=data)
+
+        log_debug(f"Email sending status code: {response.status_code}")
+        log_debug(f"Email sending response: {response.text}")
+
+        if response.status_code != 200:
+            log_debug(f"Failed to send email for post: {post['title']}. Status code: {response.status_code}")
+        else:
+            log_debug(f"Email sent successfully for post: {post['title']}")
+
+# Main script
 def main():
     log_debug("Script started")
     init_db()
@@ -149,6 +159,12 @@ def main():
 
     log_debug(f"Found {len(new_posts)} new posts")
     log_debug(f"Updated {len(updated_posts)} existing posts")
+
+    if new_posts:
+        send_email(new_posts)
+        log_debug(f"Attempted to send {len(new_posts)} email(s) for new posts")
+    else:
+        log_debug("No new posts found. No emails sent.")
 
     log_debug("Script finished")
 
