@@ -3,17 +3,16 @@ import sqlite3
 from datetime import datetime
 import xml.etree.ElementTree as ET
 
+# RSS feed URL
+RSS_URL = f"https://old.reddit.com/r/frugalmalefashion/new/.rss"
+
 # Database setup
 DB_NAME = 'reddit_posts.db'
-SUBREDDIT = "frugalmalefashion"
-RSS_URL = f"https://old.reddit.com/r/{SUBREDDIT}/new/.rss"
 
-# Debug logging
 def log_debug(message):
     with open('debug.log', 'a') as f:
         f.write(f"{datetime.now()}: {message}\n")
 
-# Get user-agent
 def get_user_agent():
     try:
         user_agents = requests.get(
@@ -24,7 +23,6 @@ def get_user_agent():
         log_debug(f"Error fetching user agent: {e}")
         return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
 
-# Initialize database
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
@@ -33,6 +31,7 @@ def init_db():
         id TEXT PRIMARY KEY,
         title TEXT,
         link TEXT,
+        published TEXT,
         author TEXT,
         thumbnail TEXT,
         content TEXT,
@@ -49,32 +48,10 @@ def init_db():
     conn.commit()
     conn.close()
 
-# Fetch detailed content for a post
-def fetch_post_details(post_id):
-    detailed_url = f"https://old.reddit.com/r/{SUBREDDIT}/comments/{post_id}/.rss"
-    log_debug(f"Fetching detailed RSS feed from {detailed_url}")
-    headers = {"User-Agent": get_user_agent()}
-    response = requests.get(detailed_url, headers=headers)
-
-    if response.status_code != 200:
-        log_debug(f"Error fetching detailed RSS: {response.status_code}")
-        return ""
-
-    try:
-        root = ET.fromstring(response.content)
-        namespace = {'atom': 'http://www.w3.org/2005/Atom'}
-        entry = root.find('atom:entry', namespace)
-        if entry is not None:
-            content = entry.find('atom:content', namespace).text
-            return content
-    except Exception as e:
-        log_debug(f"Error parsing detailed RSS: {e}")
-    return ""
-
-# Fetch posts from RSS feed
 def fetch_posts():
+    user_agent = get_user_agent()
+    headers = {"user-agent": user_agent}
     log_debug(f"Fetching RSS feed from {RSS_URL}")
-    headers = {"User-Agent": get_user_agent()}
     response = requests.get(RSS_URL, headers=headers)
 
     if response.status_code != 200:
@@ -82,40 +59,52 @@ def fetch_posts():
         return []
 
     try:
-        # Fix XML namespace handling
         root = ET.fromstring(response.content)
-        namespace = {'atom': 'http://www.w3.org/2005/Atom', 
-                     'media': 'http://search.yahoo.com/mrss/'}
-        
-        posts = []
-
-        for entry in root.findall('atom:entry', namespace):
-            post_id = entry.find('atom:id', namespace).text.split('/')[-2]
-            title = entry.find('atom:title', namespace).text
-            link = entry.find("atom:link[@rel='alternate']", namespace).attrib['href']
-            author = entry.find('atom:author/atom:name', namespace).text
-            thumbnail_elem = entry.find('media:thumbnail', namespace)
-            thumbnail = thumbnail_elem.attrib['url'] if thumbnail_elem is not None else None
-
-            # Fetch detailed content for the post
-            content = fetch_post_details(post_id)
-
-            posts.append({
-                'id': post_id,
-                'title': title,
-                'link': link,
-                'author': author,
-                'thumbnail': thumbnail,
-                'content': content
-            })
-
-        return posts
-
-    except Exception as e:
-        log_debug(f"RSS parsing error: {e}")
+    except ET.ParseError as e:
+        log_debug(f"XML parsing error: {e}")
         return []
-        
-# Update database with fetched posts
+
+    namespaces = {"atom": "http://www.w3.org/2005/Atom", "media": "http://search.yahoo.com/mrss/"}
+
+    posts = []
+    for entry in root.findall("atom:entry", namespaces):
+        post_link = entry.find("atom:link", namespaces).attrib['href']
+        post_content = fetch_post_content(post_link)
+        post = {
+            'id': entry.find("atom:id", namespaces).text,
+            'title': entry.find("atom:title", namespaces).text,
+            'link': post_link,
+            'published': entry.find("atom:updated", namespaces).text,
+            'author': entry.find("atom:author/atom:name", namespaces).text,
+            'thumbnail': None,
+            'content': post_content
+        }
+        posts.append(post)
+
+    return posts
+
+def fetch_post_content(link):
+    try:
+        # Append `.json` to the Reddit post URL
+        json_link = link + '.json'
+        response = requests.get(json_link)
+
+        if response.status_code == 200:
+            data = response.json()
+
+            # Extract content from the JSON response
+            if isinstance(data, list) and len(data) > 0:
+                post_data = data[0]['data']['children'][0]['data']
+                # Get the formatted HTML content or plain text as a fallback
+                content_html = post_data.get('selftext_html') or post_data.get('selftext', "No content available")
+                return content_html
+
+        log_debug(f"Failed to fetch content for {link}: Status Code {response.status_code}")
+    except Exception as e:
+        log_debug(f"Error fetching post content for {link}: {e}")
+
+    return "No content available"
+
 def update_database(posts):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
@@ -131,9 +120,9 @@ def update_database(posts):
 
         if result is None:
             cursor.execute('''
-            INSERT INTO posts (id, title, link, author, thumbnail, content, first_seen, last_seen)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (post['id'], post['title'], post['link'], post['author'], post['thumbnail'], post['content'], current_time, current_time))
+            INSERT INTO posts (id, title, link, published, author, thumbnail, content, first_seen, last_seen)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (post['id'], post['title'], post['link'], post['published'], post['author'], post['thumbnail'], post['content'], current_time, current_time))
             new_posts.append(post)
         else:
             cursor.execute('UPDATE posts SET last_seen = ?, content = ? WHERE id = ?', (current_time, post['content'], post['id']))
@@ -146,7 +135,6 @@ def update_database(posts):
 
     return new_posts, updated_posts
 
-# Notify via email (optional functionality remains the same)
 def send_email(new_posts):
     headers = {
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -157,11 +145,12 @@ def send_email(new_posts):
         <html>
             <body>
                 <h2>New Post from Reddit Tracker</h2>
-                <p>A new post has been found on <strong>{SUBREDDIT}</strong>:</p>
+                <p>A new post has been found on <strong>Frugal Male Fashion</strong>:</p>
                 <ul>
                     <li><strong>Title:</strong> <a href='{post['link']}'>{post['title']}</a></li>
                     <li><strong>Author:</strong> {post['author']}</li>
-                    <li><strong>Content:</strong> {post['content']}</li>
+                    <li><strong>Published:</strong> {post['published']}</li>
+                    <li><strong>Content:</strong> {post['content'] if post['content'] else 'No content available'}</li>
                 </ul>
                 <p>Click the title to view the full post.</p>
             </body>
@@ -187,7 +176,6 @@ def send_email(new_posts):
         else:
             log_debug(f"Email sent successfully for post: {post['title']}")
 
-# Main script
 def main():
     log_debug("Script started")
     init_db()
