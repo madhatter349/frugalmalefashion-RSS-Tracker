@@ -3,6 +3,7 @@ import sqlite3
 from datetime import datetime
 import time
 import random
+import feedparser
 
 # RSS feed URL
 RSS_URL = "https://old.reddit.com/r/frugalmalefashion/new/.rss"
@@ -58,8 +59,12 @@ def fetch_posts():
             log_debug(f"Error: Received status code {response.status_code}")
             return []
 
-        data = response.json()  # Assuming the response is JSON
-        return data.get("items", [])
+        feed = feedparser.parse(response.content)
+        if feed.bozo:  # Indicates an error while parsing
+            log_debug(f"Error parsing RSS feed: {feed.bozo_exception}")
+            return []
+
+        return feed.entries
     except Exception as e:
         log_debug(f"Error fetching posts: {e}")
         return []
@@ -72,7 +77,7 @@ def update_database(posts):
     new_posts = []
 
     for post in posts:
-        post_id = post.get("guid")
+        post_id = post.get("id", post.get("link"))
         cursor.execute('SELECT id FROM posts WHERE id = ?', (post_id,))
         result = cursor.fetchone()
 
@@ -84,9 +89,9 @@ def update_database(posts):
                 post_id,
                 post.get("title"),
                 post.get("link"),
-                post.get("pubDate"),
-                post.get("author"),
-                post.get("description"),
+                post.get("published", ""),
+                post.get("author", ""),
+                post.get("summary", ""),
                 current_time,
                 current_time
             ))
