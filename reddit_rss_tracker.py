@@ -85,14 +85,12 @@ def fetch_posts():
 
 def fetch_post_content(link):
     try:
-        # Append `/.rss` to the Reddit post URL
-        rss_link = link + '/.rss'
+        # Adjust the link format for the RSS feed
+        rss_link = link.replace("/comments/", "/") + "/.rss"
         response = requests.get(rss_link)
 
         if response.status_code == 200:
             data = response.text  # RSS feed is usually XML, so fetch as text
-
-            # Process the RSS feed content (e.g., using an XML parser if needed)
             return data
 
         log_debug(f"Failed to fetch content for {link}: Status Code {response.status_code}")
