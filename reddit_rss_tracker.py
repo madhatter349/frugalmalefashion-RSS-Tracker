@@ -2,8 +2,8 @@ import requests
 import sqlite3
 from datetime import datetime
 import time
-import random
 import feedparser
+from bs4 import BeautifulSoup
 
 # RSS feed URL
 RSS_URL = "https://old.reddit.com/r/frugalmalefashion/new/.rss"
@@ -69,6 +69,15 @@ def fetch_posts():
         log_debug(f"Error fetching posts: {e}")
         return []
 
+def clean_description(raw_html):
+    try:
+        soup = BeautifulSoup(raw_html, 'html.parser')
+        # Extract and clean the text content
+        return soup.get_text(separator=" ", strip=True)
+    except Exception as e:
+        log_debug(f"Error cleaning description: {e}")
+        return raw_html
+
 def update_database(posts):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
@@ -81,6 +90,8 @@ def update_database(posts):
         cursor.execute('SELECT id FROM posts WHERE id = ?', (post_id,))
         result = cursor.fetchone()
 
+        cleaned_description = clean_description(post.get("summary", ""))
+
         if result is None:
             cursor.execute('''
             INSERT INTO posts (id, title, link, published, author, description, first_seen, last_seen)
@@ -91,7 +102,7 @@ def update_database(posts):
                 post.get("link"),
                 post.get("published", ""),
                 post.get("author", ""),
-                post.get("summary", ""),
+                cleaned_description,
                 current_time,
                 current_time
             ))
